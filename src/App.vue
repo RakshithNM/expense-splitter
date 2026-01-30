@@ -133,6 +133,9 @@ const shareableUrl = computed(() => {
 })
 
 const canShare = ref(false)
+const canCopy = ref(false)
+const shareStatus = ref('')
+const shareInput = ref<HTMLInputElement | null>(null)
 
 function addPerson() {
   const name = newPersonName.value.trim()
@@ -246,19 +249,47 @@ function syncUrl() {
   window.history.replaceState({}, '', nextUrl)
 }
 
-async function shareSplit() {
-  if(!canShare.value) {
-    return
-  }
+async function copyShareUrl() {
+  shareStatus.value = ''
 
   try {
-    await navigator.share({
-      title: 'Group expense split',
-      text: 'Here is the shared expense split.',
-      url: shareableUrl.value,
-    })
+    if(typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(shareableUrl.value)
+      shareStatus.value = 'Copied to clipboard.'
+      return
+    }
+  } catch {
+    // Fall through to manual copy.
+  }
+
+  if(shareInput.value) {
+    shareInput.value.focus()
+    shareInput.value.select()
+    const success = document.execCommand('copy')
+    shareStatus.value = success ? 'Copied to clipboard.' : 'Copy failed.'
+  } else {
+    shareStatus.value = 'Copy failed.'
+  }
+}
+
+async function shareSplit() {
+  try {
+    if(canShare.value) {
+      await navigator.share({
+        title: 'Group expense split',
+        text: 'Here is the shared expense split.',
+        url: shareableUrl.value,
+      })
+    } else if(canCopy.value) {
+      await copyShareUrl()
+    } else {
+      shareStatus.value = 'Sharing is not supported.'
+    }
   } catch {
     // Ignore cancellation or share errors.
+    if(canCopy.value) {
+      await copyShareUrl()
+    }
   }
 }
 
@@ -267,6 +298,10 @@ onMounted(() => {
   syncPeopleFromExpenses()
   isHydrated.value = true
   canShare.value = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
+  canCopy.value =
+    typeof navigator !== 'undefined' &&
+    (typeof navigator.clipboard?.writeText === 'function' ||
+      (typeof document !== 'undefined' && typeof document.execCommand === 'function'))
 })
 
 watch(expenses, () => {
@@ -405,12 +440,18 @@ watch([people, expenses], syncUrl, { deep: true })
       <section class="panel share">
         <h2>Share this split</h2>
         <p class="muted">The data lives in the URL. Copy and send it to the group.</p>
-        <input class="share-url" type="text" :value="shareableUrl" readonly />
+        <input ref="shareInput" class="share-url" type="text" :value="shareableUrl" readonly />
         <div class="share-actions">
-          <button type="button" class="primary" :disabled="!canShare" @click="shareSplit">
+          <button type="button" class="primary" @click="shareSplit">
             Share link
           </button>
-          <span v-if="!canShare" class="hint">Sharing is not supported in this browser.</span>
+          <span v-if="shareStatus" class="hint">{{ shareStatus }}</span>
+          <span v-else-if="!canShare && !canCopy" class="hint">
+            Sharing is not supported in this browser.
+          </span>
+          <span v-else-if="!canShare && canCopy" class="hint">
+            Sharing not available here. Copy will be used instead.
+          </span>
         </div>
       </section>
     </main>
