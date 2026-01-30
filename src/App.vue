@@ -265,42 +265,6 @@ watch([people, expenses], syncUrl, { deep: true })
 
     <main class="grid">
       <section class="panel">
-        <h2>People in the group</h2>
-        <div class="field-group">
-          <label class="field">
-            <span>Add person</span>
-            <div class="add-row">
-              <input
-                v-model.trim="newPersonName"
-                type="text"
-                placeholder="Alex"
-                @keyup.enter="addPerson"
-              />
-              <button type="button" class="primary" @click="addPerson">Add</button>
-            </div>
-          </label>
-        </div>
-
-        <div class="list">
-          <div v-for="(person, index) in people" :key="index" class="list-item">
-            <input v-model.trim="person.name" type="text" />
-            <button type="button" class="ghost" @click="removePerson(index)">Remove</button>
-          </div>
-        </div>
-
-        <div v-if="duplicateNames.length" class="warning">
-          Duplicate names detected: {{ duplicateNames.join(', ') }}. Duplicates are merged in the split.
-        </div>
-
-        <div class="split-list">
-          <p class="label">Active group</p>
-          <div class="pill-row">
-            <span v-for="name in uniquePeople" :key="name" class="pill">{{ name }}</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
         <h2>Expenses paid</h2>
         <div class="field-group">
           <label class="field">
@@ -340,6 +304,42 @@ watch([people, expenses], syncUrl, { deep: true })
 
         <div v-if="unknownPayers.length" class="warning">
           Payers not in the group list: {{ unknownPayers.join(', ') }}. Add them to include in the split.
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>People in the group</h2>
+        <div class="field-group">
+          <label class="field">
+            <span>Add person</span>
+            <div class="add-row">
+              <input
+                v-model.trim="newPersonName"
+                type="text"
+                placeholder="Alex"
+                @keyup.enter="addPerson"
+              />
+              <button type="button" class="primary" @click="addPerson">Add</button>
+            </div>
+          </label>
+        </div>
+
+        <div class="list">
+          <div v-for="(person, index) in people" :key="index" class="list-item">
+            <input v-model.trim="person.name" type="text" />
+            <button type="button" class="ghost" @click="removePerson(index)">Remove</button>
+          </div>
+        </div>
+
+        <div v-if="duplicateNames.length" class="warning">
+          Duplicate names detected: {{ duplicateNames.join(', ') }}. Duplicates are merged in the split.
+        </div>
+
+        <div class="split-list">
+          <p class="label">Active group</p>
+          <div class="pill-row">
+            <span v-for="name in uniquePeople" :key="name" class="pill">{{ name }}</span>
+          </div>
         </div>
       </section>
 
