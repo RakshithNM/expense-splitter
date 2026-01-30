@@ -132,6 +132,8 @@ const shareableUrl = computed(() => {
   return url.toString()
 })
 
+const canShare = ref(false)
+
 function addPerson() {
   const name = newPersonName.value.trim()
   if(!name) {
@@ -199,18 +201,6 @@ function loadFromUrl() {
       expenses.value = []
     }
   }
-
-  if(people.value.length === 0) {
-    people.value = [{ name: 'Alex' }, { name: 'Sam' }, { name: 'Riya' }]
-  }
-
-  if(expenses.value.length === 0) {
-    expenses.value = [
-      { payer: 'Alex', amount: 900, note: 'Hotel' },
-      { payer: 'Sam', amount: 450, note: 'Tickets' },
-      { payer: 'Riya', amount: 150, note: 'Snacks' },
-    ]
-  }
 }
 
 function syncPeopleFromExpenses() {
@@ -256,10 +246,27 @@ function syncUrl() {
   window.history.replaceState({}, '', nextUrl)
 }
 
+async function shareSplit() {
+  if(!canShare.value) {
+    return
+  }
+
+  try {
+    await navigator.share({
+      title: 'Group expense split',
+      text: 'Here is the shared expense split.',
+      url: shareableUrl.value,
+    })
+  } catch {
+    // Ignore cancellation or share errors.
+  }
+}
+
 onMounted(() => {
   loadFromUrl()
   syncPeopleFromExpenses()
   isHydrated.value = true
+  canShare.value = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
 })
 
 watch(expenses, () => {
@@ -399,6 +406,12 @@ watch([people, expenses], syncUrl, { deep: true })
         <h2>Share this split</h2>
         <p class="muted">The data lives in the URL. Copy and send it to the group.</p>
         <input class="share-url" type="text" :value="shareableUrl" readonly />
+        <div class="share-actions">
+          <button type="button" class="primary" :disabled="!canShare" @click="shareSplit">
+            Share link
+          </button>
+          <span v-if="!canShare" class="hint">Sharing is not supported in this browser.</span>
+        </div>
       </section>
     </main>
   </div>
@@ -649,6 +662,13 @@ button.ghost:hover {
   transform: translateY(-1px);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  box-shadow: none;
+  transform: none;
+}
+
 .pill-row {
   display: flex;
   flex-wrap: wrap;
@@ -676,6 +696,19 @@ button.ghost:hover {
   background: #fff9f4;
   margin-top: 0.8rem;
   color: var(--ink-2);
+}
+
+.share-actions {
+  margin-top: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.hint {
+  font-size: 0.9rem;
+  color: var(--ink-3);
 }
 
 .muted {
