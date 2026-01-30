@@ -361,7 +361,7 @@ watch([people, expenses], syncUrl, { deep: true })
         </div>
 
         <div class="split-list">
-          <p class="label">Active group</p>
+          <p v-if="uniquePeople.length > 0" class="label">Active group</p>
           <div class="pill-row">
             <span v-for="name in uniquePeople" :key="name" class="pill">{{ name }}</span>
           </div>
