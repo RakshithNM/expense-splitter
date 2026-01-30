@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 
 type Person = {
   name: string
@@ -174,6 +174,14 @@ const balances = computed(() =>
     return { name, paid, sent, received, balance }
   })
 )
+
+const settlementEpsilon = 0.01
+const allSettled = computed(() =>
+  balances.value.length > 0 &&
+  balances.value.every((person) => Math.abs(person.balance) <= settlementEpsilon)
+)
+const showConfetti = ref(false)
+let confettiTimer: number | undefined
 
 const unknownPayers = computed(() => {
   const peopleKeys = new Set(uniquePeople.value.map((name) => name.toLowerCase()))
@@ -577,6 +585,18 @@ onMounted(() => {
   saveToStorage()
 })
 
+watch(allSettled, (settled, prevSettled) => {
+  if(settled && !prevSettled) {
+    showConfetti.value = true
+    if(confettiTimer) {
+      window.clearTimeout(confettiTimer)
+    }
+    confettiTimer = window.setTimeout(() => {
+      showConfetti.value = false
+    }, 2200)
+  }
+})
+
 watch(expenses, () => {
   syncPeopleFromExpenses()
 }, { deep: true })
@@ -589,10 +609,19 @@ watch([people, expenses, payments], () => {
   syncUrl()
   saveToStorage()
 }, { deep: true, flush: 'post' })
+
+onUnmounted(() => {
+  if(confettiTimer) {
+    window.clearTimeout(confettiTimer)
+  }
+})
 </script>
 
 <template>
   <div class="page">
+    <div v-if="showConfetti" class="confetti" aria-hidden="true">
+      <span v-for="n in 30" :key="n" class="confetti-piece" />
+    </div>
     <header class="hero">
       <div>
         <p class="eyebrow">Group expense splitter</p>
@@ -1131,6 +1160,81 @@ button:disabled {
 .muted {
   color: var(--ink-2);
   margin-top: 0.5rem;
+}
+
+.confetti {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 10;
+}
+
+.confetti-piece {
+  position: absolute;
+  top: -10%;
+  width: 10px;
+  height: 16px;
+  opacity: 0.9;
+  animation: confetti-fall 1.8s ease-out forwards;
+}
+
+.confetti-piece:nth-child(3n) {
+  width: 8px;
+  height: 12px;
+  animation-duration: 1.6s;
+}
+
+.confetti-piece:nth-child(4n) {
+  width: 6px;
+  height: 10px;
+  animation-duration: 1.4s;
+}
+
+.confetti-piece:nth-child(6n) {
+  width: 12px;
+  height: 18px;
+  animation-duration: 2s;
+}
+
+.confetti-piece:nth-child(1) { left: 5%; background: #ff7a59; animation-delay: 0s; }
+.confetti-piece:nth-child(2) { left: 12%; background: #f3c969; animation-delay: 0.2s; }
+.confetti-piece:nth-child(3) { left: 20%; background: #6cc3b8; animation-delay: 0.4s; }
+.confetti-piece:nth-child(4) { left: 28%; background: #f28fb4; animation-delay: 0.1s; }
+.confetti-piece:nth-child(5) { left: 36%; background: #8d9bff; animation-delay: 0.3s; }
+.confetti-piece:nth-child(6) { left: 44%; background: #ffb347; animation-delay: 0.5s; }
+.confetti-piece:nth-child(7) { left: 52%; background: #9dd56e; animation-delay: 0.15s; }
+.confetti-piece:nth-child(8) { left: 60%; background: #ff7a59; animation-delay: 0.35s; }
+.confetti-piece:nth-child(9) { left: 68%; background: #6cc3b8; animation-delay: 0.55s; }
+.confetti-piece:nth-child(10) { left: 76%; background: #f3c969; animation-delay: 0.25s; }
+.confetti-piece:nth-child(11) { left: 84%; background: #f28fb4; animation-delay: 0.45s; }
+.confetti-piece:nth-child(12) { left: 92%; background: #8d9bff; animation-delay: 0.6s; }
+.confetti-piece:nth-child(13) { left: 3%; background: #ffb347; animation-delay: 0.12s; }
+.confetti-piece:nth-child(14) { left: 15%; background: #9dd56e; animation-delay: 0.22s; }
+.confetti-piece:nth-child(15) { left: 27%; background: #ff7a59; animation-delay: 0.32s; }
+.confetti-piece:nth-child(16) { left: 39%; background: #6cc3b8; animation-delay: 0.42s; }
+.confetti-piece:nth-child(17) { left: 51%; background: #f3c969; animation-delay: 0.52s; }
+.confetti-piece:nth-child(18) { left: 63%; background: #f28fb4; animation-delay: 0.18s; }
+.confetti-piece:nth-child(19) { left: 75%; background: #8d9bff; animation-delay: 0.28s; }
+.confetti-piece:nth-child(20) { left: 87%; background: #ffb347; animation-delay: 0.38s; }
+.confetti-piece:nth-child(21) { left: 9%; background: #9dd56e; animation-delay: 0.48s; }
+.confetti-piece:nth-child(22) { left: 21%; background: #ff7a59; animation-delay: 0.58s; }
+.confetti-piece:nth-child(23) { left: 33%; background: #6cc3b8; animation-delay: 0.08s; }
+.confetti-piece:nth-child(24) { left: 45%; background: #f3c969; animation-delay: 0.18s; }
+.confetti-piece:nth-child(25) { left: 57%; background: #f28fb4; animation-delay: 0.28s; }
+.confetti-piece:nth-child(26) { left: 69%; background: #8d9bff; animation-delay: 0.38s; }
+.confetti-piece:nth-child(27) { left: 81%; background: #ffb347; animation-delay: 0.48s; }
+.confetti-piece:nth-child(28) { left: 93%; background: #9dd56e; animation-delay: 0.58s; }
+.confetti-piece:nth-child(29) { left: 17%; background: #ff7a59; animation-delay: 0.26s; }
+.confetti-piece:nth-child(30) { left: 71%; background: #6cc3b8; animation-delay: 0.36s; }
+
+@keyframes confetti-fall {
+  0% {
+    transform: translate3d(0, -20vh, 0) rotate(0deg);
+  }
+  100% {
+    transform: translate3d(0, 110vh, 0) rotate(280deg);
+  }
 }
 
 @media (max-width: 720px) {
