@@ -257,6 +257,21 @@ function removeExpense(index: number) {
   expenses.value.splice(index, 1)
 }
 
+function resetGroup() {
+  people.value = []
+  expenses.value = []
+  payments.value = []
+  newPersonName.value = ''
+  newExpensePayer.value = ''
+  newExpenseAmount.value = null
+  newExpenseNote.value = ''
+  shareStatus.value = ''
+  if(typeof localStorage !== 'undefined') {
+    localStorage.removeItem(storageKey)
+  }
+  syncUrl()
+}
+
 
 function loadFromUrl() {
   const params = new URLSearchParams(window.location.search)
@@ -814,6 +829,9 @@ onUnmounted(() => {
         <div class="share-actions">
           <button type="button" class="primary" @click="shareSplit">
             Share link
+          </button>
+          <button type="button" class="ghost" @click="resetGroup">
+            New group expense
           </button>
           <span v-if="shareStatus" class="hint">{{ shareStatus }}</span>
           <span v-else-if="!canShare && !canCopy" class="hint">
