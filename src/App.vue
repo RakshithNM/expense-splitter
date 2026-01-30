@@ -633,7 +633,6 @@ async function shareSplit() {
     if(canShare.value) {
       await navigator.share({
         title: 'Group expense split',
-        text: 'Here is the shared expense split.',
         url: shareableUrl.value,
       })
     } else if(canCopy.value) {
