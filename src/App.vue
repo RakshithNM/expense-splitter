@@ -136,6 +136,7 @@ const canShare = ref(false)
 const canCopy = ref(false)
 const shareStatus = ref('')
 const shareInput = ref<HTMLInputElement | null>(null)
+const storageKey = 'expense-splitter-state-v1'
 
 function addPerson() {
   const name = newPersonName.value.trim()
@@ -172,6 +173,7 @@ function removeExpense(index: number) {
 
 function loadFromUrl() {
   const params = new URLSearchParams(window.location.search)
+  let hasUrlData = false
 
   const peopleParam = params.get('people')
   if(peopleParam) {
@@ -181,6 +183,7 @@ function loadFromUrl() {
         people.value = parsed
           .filter((entry) => typeof entry === 'string')
           .map((name) => ({ name }))
+        hasUrlData = true
       }
     } catch {
       people.value = []
@@ -199,10 +202,64 @@ function loadFromUrl() {
             amount: typeof entry.amount === 'number' ? entry.amount : 0,
             note: typeof entry.note === 'string' ? entry.note : '',
           }))
+        hasUrlData = true
       }
     } catch {
       expenses.value = []
     }
+  }
+
+  if(!hasUrlData) {
+    loadFromStorage()
+  }
+}
+
+function loadFromStorage() {
+  if(typeof localStorage === 'undefined') {
+    return
+  }
+
+  const raw = localStorage.getItem(storageKey)
+  if(!raw) {
+    return
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    if(Array.isArray(parsed?.people)) {
+      people.value = parsed.people
+        .filter((entry: unknown) => typeof entry === 'string')
+        .map((name: string) => ({ name }))
+    }
+
+    if(Array.isArray(parsed?.expenses)) {
+      expenses.value = parsed.expenses
+        .filter((entry: unknown) => typeof entry === 'object' && entry)
+        .map((entry: any) => ({
+          payer: typeof entry.payer === 'string' ? entry.payer : '',
+          amount: typeof entry.amount === 'number' ? entry.amount : 0,
+          note: typeof entry.note === 'string' ? entry.note : '',
+        }))
+    }
+  } catch {
+    // Ignore invalid storage data.
+  }
+}
+
+function saveToStorage() {
+  if(typeof localStorage === 'undefined') {
+    return
+  }
+
+  const payload = {
+    people: uniquePeople.value,
+    expenses: normalizedExpenses.value,
+  }
+
+  try {
+    localStorage.setItem(storageKey, JSON.stringify(payload))
+  } catch {
+    // Ignore storage errors.
   }
 }
 
@@ -221,6 +278,10 @@ function syncPeopleFromExpenses() {
       people.value.push({ name: payer })
       changed = true
     }
+  }
+
+  if(changed) {
+    saveToStorage()
   }
 
   return changed
@@ -302,13 +363,17 @@ onMounted(() => {
     typeof navigator !== 'undefined' &&
     (typeof navigator.clipboard?.writeText === 'function' ||
       (typeof document !== 'undefined' && typeof document.execCommand === 'function'))
+  saveToStorage()
 })
 
 watch(expenses, () => {
   syncPeopleFromExpenses()
 }, { deep: true })
 
-watch([people, expenses], syncUrl, { deep: true })
+watch([people, expenses], () => {
+  syncUrl()
+  saveToStorage()
+}, { deep: true, flush: 'post' })
 </script>
 
 <template>
