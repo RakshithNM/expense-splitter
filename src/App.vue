@@ -21,6 +21,7 @@ type Payment = {
   note: string
 }
 
+
 const people = ref<Person[]>([])
 const expenses = ref<Expense[]>([])
 const payments = ref<Payment[]>([])
@@ -28,10 +29,6 @@ const newPersonName = ref('')
 const newExpensePayer = ref('')
 const newExpenseAmount = ref<number | null>(null)
 const newExpenseNote = ref('')
-const newPaymentFrom = ref('')
-const newPaymentTo = ref('')
-const newPaymentAmount = ref<number | null>(null)
-const newPaymentNote = ref('')
 const isHydrated = ref(false)
 
 const currency = new Intl.NumberFormat('en-US', {
@@ -82,7 +79,7 @@ const normalizedExpenses = computed(() =>
   })
 )
 
-const normalizedExplicitPayments = computed(() =>
+const normalizedPayments = computed(() =>
   payments.value
     .map((payment) => {
       const amount = Number.isFinite(payment.amount) ? Math.max(0, payment.amount) : 0
@@ -94,27 +91,6 @@ const normalizedExplicitPayments = computed(() =>
       }
     })
     .filter((payment) => payment.from && payment.to && payment.from !== payment.to)
-)
-
-const derivedPayments = computed(() =>
-  people.value
-    .filter((person) => person.paid && person.paidAmount > 0)
-    .map((person) => ({
-      from: person.name,
-      to: person.paidTo,
-      amount: person.paidAmount,
-      note: 'Settlement',
-    }))
-    .filter((payment) => payment.from.trim() && payment.to.trim() && payment.from !== payment.to)
-)
-
-const normalizedPayments = computed(() =>
-  [...normalizedExplicitPayments.value, ...derivedPayments.value].map((payment) => ({
-    from: payment.from.trim(),
-    to: payment.to.trim(),
-    amount: Number.isFinite(payment.amount) ? Math.max(0, payment.amount) : 0,
-    note: payment.note.trim(),
-  }))
 )
 
 const totalSpent = computed(() =>
@@ -217,7 +193,7 @@ const shareableUrl = computed(() => {
     params.set('expenses', JSON.stringify(filteredExpenses))
   }
 
-  const filteredPayments = normalizedExplicitPayments.value.filter(
+  const filteredPayments = normalizedPayments.value.filter(
     (payment) => payment.from.length > 0 && payment.to.length > 0 && payment.amount > 0
   )
 
@@ -261,32 +237,26 @@ function addExpense() {
   newExpenseNote.value = ''
 }
 
-function addPayment() {
-  const from = newPaymentFrom.value.trim()
-  const to = newPaymentTo.value.trim()
-  const amount = newPaymentAmount.value ?? 0
-  if(!from || !to || from === to || amount <= 0) {
+function logPaymentForPerson(person: Person) {
+  const from = person.name.trim()
+  const to = person.paidTo.trim()
+  const amount = person.paidAmount
+  if(!person.paid || !from || !to || from === to || amount <= 0) {
     return
   }
+
   payments.value.push({
     from,
     to,
     amount,
-    note: newPaymentNote.value.trim(),
+    note: 'Settlement',
   })
-  newPaymentFrom.value = ''
-  newPaymentTo.value = ''
-  newPaymentAmount.value = null
-  newPaymentNote.value = ''
 }
 
 function removeExpense(index: number) {
   expenses.value.splice(index, 1)
 }
 
-function removePayment(index: number) {
-  payments.value.splice(index, 1)
-}
 
 function loadFromUrl() {
   const params = new URLSearchParams(window.location.search)
@@ -435,7 +405,7 @@ function saveToStorage() {
       paidTo: person.paidTo,
     })),
     expenses: normalizedExpenses.value,
-    payments: normalizedExplicitPayments.value,
+    payments: normalizedPayments.value,
   }
 
   try {
@@ -492,6 +462,62 @@ function syncPeopleFromExpenses() {
   return changed
 }
 
+function syncPeoplePaymentStatus() {
+  const sentTotals = new Map<string, number>()
+  const recipientTotals = new Map<string, Map<string, number>>()
+
+  for(const payment of normalizedPayments.value) {
+    if(!payment.from || !payment.to || payment.amount <= 0) {
+      continue
+    }
+    const fromKey = payment.from.toLowerCase()
+    const toKey = payment.to.toLowerCase()
+    sentTotals.set(fromKey, (sentTotals.get(fromKey) ?? 0) + payment.amount)
+    if(!recipientTotals.has(fromKey)) {
+      recipientTotals.set(fromKey, new Map())
+    }
+    const perRecipient = recipientTotals.get(fromKey)!
+    perRecipient.set(toKey, (perRecipient.get(toKey) ?? 0) + payment.amount)
+  }
+
+  for(const person of people.value) {
+    const key = person.name.trim().toLowerCase()
+    if(!key) {
+      continue
+    }
+    const paid = paidByName.value.get(key) ?? 0
+    const owed = Math.max(0, perPersonShare.value - paid)
+    const sent = sentTotals.get(key) ?? 0
+    const fullyPaid = owed > 0 && sent >= owed - settlementEpsilon
+
+    if(fullyPaid) {
+      if(!person.paid) {
+        person.paid = true
+      }
+      if(person.paidAmount === 0) {
+        person.paidAmount = sent
+      }
+      const recipients = recipientTotals.get(key)
+      if(recipients && recipients.size > 0) {
+        let topRecipient = ''
+        let topAmount = -1
+        for(const [recipient, amount] of recipients.entries()) {
+          if(amount > topAmount) {
+            topAmount = amount
+            topRecipient = recipient
+          }
+        }
+        const match = uniquePeople.value.find(
+          (name) => name.toLowerCase() === topRecipient
+        )
+        if(!person.paidTo) {
+          person.paidTo = match ?? person.paidTo
+        }
+      }
+    }
+  }
+}
+
 function syncUrl() {
   if(!isHydrated.value) {
     return
@@ -516,7 +542,7 @@ function syncUrl() {
     params.set('expenses', JSON.stringify(filteredExpenses))
   }
 
-  const filteredPayments = normalizedExplicitPayments.value.filter(
+  const filteredPayments = normalizedPayments.value.filter(
     (payment) => payment.from.length > 0 && payment.to.length > 0 && payment.amount > 0
   )
 
@@ -576,6 +602,7 @@ async function shareSplit() {
 onMounted(() => {
   loadFromUrl()
   syncPeopleFromExpenses()
+  syncPeoplePaymentStatus()
   isHydrated.value = true
   canShare.value = typeof navigator !== 'undefined' && typeof navigator.share === 'function'
   canCopy.value =
@@ -603,6 +630,11 @@ watch(expenses, () => {
 
 watch(payments, () => {
   syncPeopleFromExpenses()
+  syncPeoplePaymentStatus()
+}, { deep: true })
+
+watch([people, expenses], () => {
+  syncPeoplePaymentStatus()
 }, { deep: true })
 
 watch([people, expenses, payments], () => {
@@ -727,6 +759,9 @@ onUnmounted(() => {
               placeholder="Paid amount"
               :disabled="!person.paid"
             />
+            <button type="button" class="ghost" @click="logPaymentForPerson(person)">
+              Log payment
+            </button>
           </div>
         </div>
 
@@ -738,48 +773,6 @@ onUnmounted(() => {
           <p v-if="uniquePeople.length > 0" class="label">Active group</p>
           <div class="pill-row">
             <span v-for="name in uniquePeople" :key="name" class="pill">{{ name }}</span>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
-        <h2>Payments made</h2>
-        <div class="field-group">
-          <label class="field">
-            <span>Log a payment</span>
-            <div class="expense-row">
-              <select v-model="newPaymentFrom">
-                <option value="">From</option>
-                <option v-for="name in uniquePeople" :key="`from-${name}`" :value="name">
-                  {{ name }}
-                </option>
-              </select>
-              <select v-model="newPaymentTo">
-                <option value="">To</option>
-                <option v-for="name in uniquePeople" :key="`to-${name}`" :value="name">
-                  {{ name }}
-                </option>
-              </select>
-              <input
-                v-model.number="newPaymentAmount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="Amount"
-              />
-              <input v-model.trim="newPaymentNote" type="text" placeholder="Note" />
-              <button type="button" class="primary" @click="addPayment">Add</button>
-            </div>
-          </label>
-        </div>
-
-        <div class="list">
-          <div v-for="(payment, index) in payments" :key="index" class="list-item">
-            <input v-model.trim="payment.from" type="text" list="people-list" />
-            <input v-model.trim="payment.to" type="text" list="people-list" />
-            <input v-model.number="payment.amount" type="number" min="0" step="0.01" />
-            <input v-model.trim="payment.note" type="text" placeholder="Note" />
-            <button type="button" class="ghost" @click="removePayment(index)">Remove</button>
           </div>
         </div>
       </section>
