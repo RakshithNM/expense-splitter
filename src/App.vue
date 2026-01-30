@@ -453,7 +453,6 @@ button {
 }
 
 .subtitle {
-  max-width: 520px;
   color: var(--ink-2);
   margin-top: 0.9rem;
   line-height: 1.5;
