@@ -6,6 +6,7 @@ type Person = {
   paid: boolean
   paidAmount: number
   paidTo: string
+  auto: boolean
 }
 
 type Expense = {
@@ -153,7 +154,10 @@ const balances = computed(() =>
 
 const settlementEpsilon = 0.01
 const allSettled = computed(() =>
+  totalSpent.value > 0 &&
+  uniquePeople.value.length > 1 &&
   balances.value.length > 0 &&
+  normalizedPayments.value.length > 0 &&
   balances.value.every((person) => Math.abs(person.balance) <= settlementEpsilon)
 )
 const showConfetti = ref(false)
@@ -206,6 +210,12 @@ const shareableUrl = computed(() => {
   return url.toString()
 })
 
+const hasGroupData = computed(() =>
+  people.value.some((person) => person.name.trim().length > 0) ||
+  expenses.value.length > 0 ||
+  payments.value.length > 0
+)
+
 const canShare = ref(false)
 const canCopy = ref(false)
 const shareStatus = ref('')
@@ -217,7 +227,7 @@ function addPerson() {
   if(!name) {
     return
   }
-  people.value.push({ name, paid: false, paidAmount: 0, paidTo: '' })
+  people.value.push({ name, paid: false, paidAmount: 0, paidTo: '', auto: false })
   newPersonName.value = ''
 }
 
@@ -288,6 +298,7 @@ function loadFromUrl() {
             paid: false,
             paidAmount: 0,
             paidTo: '',
+            auto: false,
           }))
         } else {
           people.value = parsed
@@ -297,6 +308,7 @@ function loadFromUrl() {
               paid: typeof entry.paid === 'boolean' ? entry.paid : false,
               paidAmount: typeof entry.paidAmount === 'number' ? entry.paidAmount : 0,
               paidTo: typeof entry.paidTo === 'string' ? entry.paidTo : '',
+              auto: typeof entry.auto === 'boolean' ? entry.auto : false,
             }))
         }
         hasUrlData = true
@@ -369,6 +381,7 @@ function loadFromStorage() {
           paid: false,
           paidAmount: 0,
           paidTo: '',
+          auto: false,
         }))
       } else {
         people.value = parsed.people
@@ -378,6 +391,7 @@ function loadFromStorage() {
             paid: typeof entry.paid === 'boolean' ? entry.paid : false,
             paidAmount: typeof entry.paidAmount === 'number' ? entry.paidAmount : 0,
             paidTo: typeof entry.paidTo === 'string' ? entry.paidTo : '',
+            auto: typeof entry.auto === 'boolean' ? entry.auto : false,
           }))
       }
     }
@@ -418,6 +432,7 @@ function saveToStorage() {
       paid: person.paid,
       paidAmount: person.paidAmount,
       paidTo: person.paidTo,
+      auto: person.auto,
     })),
     expenses: normalizedExpenses.value,
     payments: normalizedPayments.value,
@@ -431,43 +446,63 @@ function saveToStorage() {
 }
 
 function syncPeopleFromExpenses() {
-  const known = new Set(people.value.map((person) => person.name.trim().toLowerCase()))
-  let changed = false
+  const referenced = new Set<string>()
 
   for(const expense of expenses.value) {
     const payer = expense.payer.trim()
-    if(!payer) {
-      continue
-    }
-    const key = payer.toLowerCase()
-    if(!known.has(key)) {
-      known.add(key)
-      people.value.push({ name: payer, paid: false, paidAmount: 0, paidTo: '' })
-      changed = true
+    if(payer) {
+      referenced.add(payer.toLowerCase())
     }
   }
 
   for(const payment of payments.value) {
     const from = payment.from.trim()
     const to = payment.to.trim()
-
     if(from) {
-      const key = from.toLowerCase()
-      if(!known.has(key)) {
-        known.add(key)
-        people.value.push({ name: from, paid: false, paidAmount: 0, paidTo: '' })
-        changed = true
-      }
+      referenced.add(from.toLowerCase())
     }
-
     if(to) {
-      const key = to.toLowerCase()
-      if(!known.has(key)) {
-        known.add(key)
-        people.value.push({ name: to, paid: false, paidAmount: 0, paidTo: '' })
-        changed = true
-      }
+      referenced.add(to.toLowerCase())
     }
+  }
+
+  const known = new Set(people.value.map((person) => person.name.trim().toLowerCase()))
+  let changed = false
+
+  for(const name of referenced) {
+    if(!known.has(name)) {
+      known.add(name)
+      const original = expenses.value.find(
+        (expense) => expense.payer.trim().toLowerCase() === name
+      )?.payer
+        ?? payments.value.find((payment) => payment.from.trim().toLowerCase() === name)?.from
+        ?? payments.value.find((payment) => payment.to.trim().toLowerCase() === name)?.to
+        ?? name
+      people.value.push({
+        name: original,
+        paid: false,
+        paidAmount: 0,
+        paidTo: '',
+        auto: true,
+      })
+      changed = true
+    }
+  }
+
+  const beforeLength = people.value.length
+  people.value = people.value.filter((person) => {
+    const key = person.name.trim().toLowerCase()
+    if(!key) {
+      return false
+    }
+    if(person.auto && !referenced.has(key)) {
+      return false
+    }
+    return true
+  })
+
+  if(people.value.length !== beforeLength) {
+    changed = true
   }
 
   if(changed) {
@@ -705,6 +740,7 @@ onUnmounted(() => {
                 min="0"
                 step="0.01"
                 placeholder="Amount"
+                @keyup.enter="addExpense"
               />
               <input v-model.trim="newExpenseNote" type="text" placeholder="Note" />
               <button type="button" class="primary" @click="addExpense">Add</button>
@@ -739,7 +775,7 @@ onUnmounted(() => {
               <input
                 v-model.trim="newPersonName"
                 type="text"
-                placeholder="Alex"
+                placeholder="Rakshith"
                 @keyup.enter="addPerson"
               />
               <button type="button" class="primary" @click="addPerson">Add</button>
@@ -830,7 +866,7 @@ onUnmounted(() => {
           <button type="button" class="primary" @click="shareSplit">
             Share link
           </button>
-          <button type="button" class="ghost" @click="resetGroup">
+          <button v-if="hasGroupData" type="button" class="ghost" @click="resetGroup">
             New group expense
           </button>
           <span v-if="shareStatus" class="hint">{{ shareStatus }}</span>
