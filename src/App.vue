@@ -213,6 +213,26 @@ function loadFromUrl() {
   }
 }
 
+function syncPeopleFromExpenses() {
+  const known = new Set(people.value.map((person) => person.name.trim().toLowerCase()))
+  let changed = false
+
+  for(const expense of expenses.value) {
+    const payer = expense.payer.trim()
+    if(!payer) {
+      continue
+    }
+    const key = payer.toLowerCase()
+    if(!known.has(key)) {
+      known.add(key)
+      people.value.push({ name: payer })
+      changed = true
+    }
+  }
+
+  return changed
+}
+
 function syncUrl() {
   if(!isHydrated.value) {
     return
@@ -238,8 +258,13 @@ function syncUrl() {
 
 onMounted(() => {
   loadFromUrl()
+  syncPeopleFromExpenses()
   isHydrated.value = true
 })
+
+watch(expenses, () => {
+  syncPeopleFromExpenses()
+}, { deep: true })
 
 watch([people, expenses], syncUrl, { deep: true })
 </script>
