@@ -231,6 +231,30 @@ function addPerson() {
   newPersonName.value = ''
 }
 
+function removePerson(index: number) {
+  const person = people.value[index]
+  if(!person) {
+    return
+  }
+  const key = person.name.trim().toLowerCase()
+  if(!key) {
+    return
+  }
+  const hasPaidExpense = normalizedExpenses.value.some(
+    (expense) => expense.payer.toLowerCase() === key && expense.amount > 0
+  )
+  if(hasPaidExpense) {
+    return
+  }
+  const nameKey = person.name.trim().toLowerCase()
+  payments.value = payments.value.filter((payment) => {
+    const fromKey = payment.from.trim().toLowerCase()
+    const toKey = payment.to.trim().toLowerCase()
+    return fromKey !== nameKey && toKey !== nameKey
+  })
+  people.value.splice(index, 1)
+}
+
 function addExpense() {
   const payer = newExpensePayer.value.trim()
   const amount = newExpenseAmount.value ?? 0
@@ -811,6 +835,14 @@ onUnmounted(() => {
             />
             <button type="button" class="ghost" @click="logPaymentForPerson(person)">
               Log payment
+            </button>
+            <button
+              type="button"
+              class="ghost"
+              :disabled="normalizedExpenses.some((expense) => expense.payer.toLowerCase() === person.name.trim().toLowerCase())"
+              @click="removePerson(index)"
+            >
+              Remove
             </button>
           </div>
         </div>
