@@ -3,6 +3,9 @@ import { computed, onMounted, ref, watch } from 'vue'
 
 type Person = {
   name: string
+  paid: boolean
+  paidAmount: number
+  paidTo: string
 }
 
 type Expense = {
@@ -11,12 +14,24 @@ type Expense = {
   note: string
 }
 
+type Payment = {
+  from: string
+  to: string
+  amount: number
+  note: string
+}
+
 const people = ref<Person[]>([])
 const expenses = ref<Expense[]>([])
+const payments = ref<Payment[]>([])
 const newPersonName = ref('')
 const newExpensePayer = ref('')
 const newExpenseAmount = ref<number | null>(null)
 const newExpenseNote = ref('')
+const newPaymentFrom = ref('')
+const newPaymentTo = ref('')
+const newPaymentAmount = ref<number | null>(null)
+const newPaymentNote = ref('')
 const isHydrated = ref(false)
 
 const currency = new Intl.NumberFormat('en-US', {
@@ -67,6 +82,41 @@ const normalizedExpenses = computed(() =>
   })
 )
 
+const normalizedExplicitPayments = computed(() =>
+  payments.value
+    .map((payment) => {
+      const amount = Number.isFinite(payment.amount) ? Math.max(0, payment.amount) : 0
+      return {
+        from: payment.from.trim(),
+        to: payment.to.trim(),
+        amount,
+        note: payment.note.trim(),
+      }
+    })
+    .filter((payment) => payment.from && payment.to && payment.from !== payment.to)
+)
+
+const derivedPayments = computed(() =>
+  people.value
+    .filter((person) => person.paid && person.paidAmount > 0)
+    .map((person) => ({
+      from: person.name,
+      to: person.paidTo,
+      amount: person.paidAmount,
+      note: 'Settlement',
+    }))
+    .filter((payment) => payment.from.trim() && payment.to.trim() && payment.from !== payment.to)
+)
+
+const normalizedPayments = computed(() =>
+  [...normalizedExplicitPayments.value, ...derivedPayments.value].map((payment) => ({
+    from: payment.from.trim(),
+    to: payment.to.trim(),
+    amount: Number.isFinite(payment.amount) ? Math.max(0, payment.amount) : 0,
+    note: payment.note.trim(),
+  }))
+)
+
 const totalSpent = computed(() =>
   normalizedExpenses.value.reduce((sum, expense) => sum + expense.amount, 0)
 )
@@ -90,12 +140,38 @@ const paidByName = computed(() => {
   return map
 })
 
+const sentByName = computed(() => {
+  const map = new Map<string, number>()
+  for(const payment of normalizedPayments.value) {
+    if(!payment.from || !payment.to || payment.amount <= 0) {
+      continue
+    }
+    const key = payment.from.toLowerCase()
+    map.set(key, (map.get(key) ?? 0) + payment.amount)
+  }
+  return map
+})
+
+const receivedByName = computed(() => {
+  const map = new Map<string, number>()
+  for(const payment of normalizedPayments.value) {
+    if(!payment.from || !payment.to || payment.amount <= 0) {
+      continue
+    }
+    const key = payment.to.toLowerCase()
+    map.set(key, (map.get(key) ?? 0) + payment.amount)
+  }
+  return map
+})
+
 const balances = computed(() =>
   uniquePeople.value.map((name) => {
     const key = name.toLowerCase()
     const paid = paidByName.value.get(key) ?? 0
-    const balance = paid - perPersonShare.value
-    return { name, paid, balance }
+    const sent = sentByName.value.get(key) ?? 0
+    const received = receivedByName.value.get(key) ?? 0
+    const balance = paid + sent - received - perPersonShare.value
+    return { name, paid, sent, received, balance }
   })
 )
 
@@ -115,8 +191,14 @@ const shareableUrl = computed(() => {
   const url = new URL(window.location.href)
   const params = new URLSearchParams()
 
-  if(uniquePeople.value.length > 0) {
-    params.set('people', JSON.stringify(uniquePeople.value))
+  if(people.value.length > 0) {
+    const payload = people.value.map((person) => ({
+      name: person.name.trim(),
+      paid: person.paid,
+      paidAmount: person.paidAmount,
+      paidTo: person.paidTo,
+    }))
+    params.set('people', JSON.stringify(payload))
   }
 
   const filteredExpenses = normalizedExpenses.value.filter(
@@ -125,6 +207,14 @@ const shareableUrl = computed(() => {
 
   if(filteredExpenses.length > 0) {
     params.set('expenses', JSON.stringify(filteredExpenses))
+  }
+
+  const filteredPayments = normalizedExplicitPayments.value.filter(
+    (payment) => payment.from.length > 0 && payment.to.length > 0 && payment.amount > 0
+  )
+
+  if(filteredPayments.length > 0) {
+    params.set('payments', JSON.stringify(filteredPayments))
   }
 
   const query = params.toString()
@@ -143,12 +233,8 @@ function addPerson() {
   if(!name) {
     return
   }
-  people.value.push({ name })
+  people.value.push({ name, paid: false, paidAmount: 0, paidTo: '' })
   newPersonName.value = ''
-}
-
-function removePerson(index: number) {
-  people.value.splice(index, 1)
 }
 
 function addExpense() {
@@ -167,8 +253,31 @@ function addExpense() {
   newExpenseNote.value = ''
 }
 
+function addPayment() {
+  const from = newPaymentFrom.value.trim()
+  const to = newPaymentTo.value.trim()
+  const amount = newPaymentAmount.value ?? 0
+  if(!from || !to || from === to || amount <= 0) {
+    return
+  }
+  payments.value.push({
+    from,
+    to,
+    amount,
+    note: newPaymentNote.value.trim(),
+  })
+  newPaymentFrom.value = ''
+  newPaymentTo.value = ''
+  newPaymentAmount.value = null
+  newPaymentNote.value = ''
+}
+
 function removeExpense(index: number) {
   expenses.value.splice(index, 1)
+}
+
+function removePayment(index: number) {
+  payments.value.splice(index, 1)
 }
 
 function loadFromUrl() {
@@ -180,9 +289,23 @@ function loadFromUrl() {
     try {
       const parsed = JSON.parse(peopleParam)
       if(Array.isArray(parsed)) {
-        people.value = parsed
-          .filter((entry) => typeof entry === 'string')
-          .map((name) => ({ name }))
+        if(parsed.every((entry) => typeof entry === 'string')) {
+          people.value = parsed.map((name) => ({
+            name,
+            paid: false,
+            paidAmount: 0,
+            paidTo: '',
+          }))
+        } else {
+          people.value = parsed
+            .filter((entry) => typeof entry === 'object' && entry)
+            .map((entry) => ({
+              name: typeof entry.name === 'string' ? entry.name : '',
+              paid: typeof entry.paid === 'boolean' ? entry.paid : false,
+              paidAmount: typeof entry.paidAmount === 'number' ? entry.paidAmount : 0,
+              paidTo: typeof entry.paidTo === 'string' ? entry.paidTo : '',
+            }))
+        }
         hasUrlData = true
       }
     } catch {
@@ -209,6 +332,26 @@ function loadFromUrl() {
     }
   }
 
+  const paymentsParam = params.get('payments')
+  if(paymentsParam) {
+    try {
+      const parsed = JSON.parse(paymentsParam)
+      if(Array.isArray(parsed)) {
+        payments.value = parsed
+          .filter((entry) => typeof entry === 'object' && entry)
+          .map((entry) => ({
+            from: typeof entry.from === 'string' ? entry.from : '',
+            to: typeof entry.to === 'string' ? entry.to : '',
+            amount: typeof entry.amount === 'number' ? entry.amount : 0,
+            note: typeof entry.note === 'string' ? entry.note : '',
+          }))
+        hasUrlData = true
+      }
+    } catch {
+      payments.value = []
+    }
+  }
+
   if(!hasUrlData) {
     loadFromStorage()
   }
@@ -227,9 +370,23 @@ function loadFromStorage() {
   try {
     const parsed = JSON.parse(raw)
     if(Array.isArray(parsed?.people)) {
-      people.value = parsed.people
-        .filter((entry: unknown) => typeof entry === 'string')
-        .map((name: string) => ({ name }))
+      if(parsed.people.every((entry: unknown) => typeof entry === 'string')) {
+        people.value = parsed.people.map((name: string) => ({
+          name,
+          paid: false,
+          paidAmount: 0,
+          paidTo: '',
+        }))
+      } else {
+        people.value = parsed.people
+          .filter((entry: unknown) => typeof entry === 'object' && entry)
+          .map((entry: any) => ({
+            name: typeof entry.name === 'string' ? entry.name : '',
+            paid: typeof entry.paid === 'boolean' ? entry.paid : false,
+            paidAmount: typeof entry.paidAmount === 'number' ? entry.paidAmount : 0,
+            paidTo: typeof entry.paidTo === 'string' ? entry.paidTo : '',
+          }))
+      }
     }
 
     if(Array.isArray(parsed?.expenses)) {
@@ -237,6 +394,17 @@ function loadFromStorage() {
         .filter((entry: unknown) => typeof entry === 'object' && entry)
         .map((entry: any) => ({
           payer: typeof entry.payer === 'string' ? entry.payer : '',
+          amount: typeof entry.amount === 'number' ? entry.amount : 0,
+          note: typeof entry.note === 'string' ? entry.note : '',
+        }))
+    }
+
+    if(Array.isArray(parsed?.payments)) {
+      payments.value = parsed.payments
+        .filter((entry: unknown) => typeof entry === 'object' && entry)
+        .map((entry: any) => ({
+          from: typeof entry.from === 'string' ? entry.from : '',
+          to: typeof entry.to === 'string' ? entry.to : '',
           amount: typeof entry.amount === 'number' ? entry.amount : 0,
           note: typeof entry.note === 'string' ? entry.note : '',
         }))
@@ -252,8 +420,14 @@ function saveToStorage() {
   }
 
   const payload = {
-    people: uniquePeople.value,
+    people: people.value.map((person) => ({
+      name: person.name.trim(),
+      paid: person.paid,
+      paidAmount: person.paidAmount,
+      paidTo: person.paidTo,
+    })),
     expenses: normalizedExpenses.value,
+    payments: normalizedExplicitPayments.value,
   }
 
   try {
@@ -275,8 +449,31 @@ function syncPeopleFromExpenses() {
     const key = payer.toLowerCase()
     if(!known.has(key)) {
       known.add(key)
-      people.value.push({ name: payer })
+      people.value.push({ name: payer, paid: false, paidAmount: 0, paidTo: '' })
       changed = true
+    }
+  }
+
+  for(const payment of payments.value) {
+    const from = payment.from.trim()
+    const to = payment.to.trim()
+
+    if(from) {
+      const key = from.toLowerCase()
+      if(!known.has(key)) {
+        known.add(key)
+        people.value.push({ name: from, paid: false, paidAmount: 0, paidTo: '' })
+        changed = true
+      }
+    }
+
+    if(to) {
+      const key = to.toLowerCase()
+      if(!known.has(key)) {
+        known.add(key)
+        people.value.push({ name: to, paid: false, paidAmount: 0, paidTo: '' })
+        changed = true
+      }
     }
   }
 
@@ -293,8 +490,14 @@ function syncUrl() {
   }
 
   const params = new URLSearchParams()
-  if(uniquePeople.value.length > 0) {
-    params.set('people', JSON.stringify(uniquePeople.value))
+  if(people.value.length > 0) {
+    const payload = people.value.map((person) => ({
+      name: person.name.trim(),
+      paid: person.paid,
+      paidAmount: person.paidAmount,
+      paidTo: person.paidTo,
+    }))
+    params.set('people', JSON.stringify(payload))
   }
 
   const filteredExpenses = normalizedExpenses.value.filter(
@@ -303,6 +506,14 @@ function syncUrl() {
 
   if(filteredExpenses.length > 0) {
     params.set('expenses', JSON.stringify(filteredExpenses))
+  }
+
+  const filteredPayments = normalizedExplicitPayments.value.filter(
+    (payment) => payment.from.length > 0 && payment.to.length > 0 && payment.amount > 0
+  )
+
+  if(filteredPayments.length > 0) {
+    params.set('payments', JSON.stringify(filteredPayments))
   }
 
   const query = params.toString()
@@ -370,7 +581,11 @@ watch(expenses, () => {
   syncPeopleFromExpenses()
 }, { deep: true })
 
-watch([people, expenses], () => {
+watch(payments, () => {
+  syncPeopleFromExpenses()
+}, { deep: true })
+
+watch([people, expenses, payments], () => {
   syncUrl()
   saveToStorage()
 }, { deep: true, flush: 'post' })
@@ -459,7 +674,30 @@ watch([people, expenses], () => {
         <div class="list">
           <div v-for="(person, index) in people" :key="index" class="list-item">
             <input v-model.trim="person.name" type="text" />
-            <button type="button" class="ghost" @click="removePerson(index)">Remove</button>
+            <label class="paid-toggle">
+              <input v-model="person.paid" type="checkbox" />
+              <span>Paid</span>
+            </label>
+            <select v-model="person.paidTo" class="paid-select" :disabled="!person.paid">
+              <option value="">Paid to</option>
+              <option
+                v-for="name in uniquePeople"
+                :key="`${person.name}-${name}`"
+                :value="name"
+                :disabled="name.toLowerCase() === person.name.trim().toLowerCase()"
+              >
+                {{ name }}
+              </option>
+            </select>
+            <input
+              v-model.number="person.paidAmount"
+              class="paid-amount"
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="Paid amount"
+              :disabled="!person.paid"
+            />
           </div>
         </div>
 
@@ -471,6 +709,48 @@ watch([people, expenses], () => {
           <p v-if="uniquePeople.length > 0" class="label">Active group</p>
           <div class="pill-row">
             <span v-for="name in uniquePeople" :key="name" class="pill">{{ name }}</span>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Payments made</h2>
+        <div class="field-group">
+          <label class="field">
+            <span>Log a payment</span>
+            <div class="expense-row">
+              <select v-model="newPaymentFrom">
+                <option value="">From</option>
+                <option v-for="name in uniquePeople" :key="`from-${name}`" :value="name">
+                  {{ name }}
+                </option>
+              </select>
+              <select v-model="newPaymentTo">
+                <option value="">To</option>
+                <option v-for="name in uniquePeople" :key="`to-${name}`" :value="name">
+                  {{ name }}
+                </option>
+              </select>
+              <input
+                v-model.number="newPaymentAmount"
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Amount"
+              />
+              <input v-model.trim="newPaymentNote" type="text" placeholder="Note" />
+              <button type="button" class="primary" @click="addPayment">Add</button>
+            </div>
+          </label>
+        </div>
+
+        <div class="list">
+          <div v-for="(payment, index) in payments" :key="index" class="list-item">
+            <input v-model.trim="payment.from" type="text" list="people-list" />
+            <input v-model.trim="payment.to" type="text" list="people-list" />
+            <input v-model.number="payment.amount" type="number" min="0" step="0.01" />
+            <input v-model.trim="payment.note" type="text" placeholder="Note" />
+            <button type="button" class="ghost" @click="removePayment(index)">Remove</button>
           </div>
         </div>
       </section>
@@ -492,7 +772,10 @@ watch([people, expenses], () => {
           <div v-for="person in balances" :key="person.name" class="balance-item">
             <div>
               <p class="label">{{ person.name }}</p>
-              <p class="caption">Paid {{ currency.format(person.paid) }}</p>
+              <p class="caption">
+                Paid {{ currency.format(person.paid) }} · Sent {{ currency.format(person.sent) }} · Received
+                {{ currency.format(person.received) }}
+              </p>
             </div>
             <p class="balance" :class="{ positive: person.balance >= 0, negative: person.balance < 0 }">
               {{ person.balance >= 0 ? 'Receives' : 'Owes' }}
@@ -649,7 +932,8 @@ button {
   color: var(--ink-2);
 }
 
-.field input {
+.field input,
+.field select {
   padding: 0.75rem 0.9rem;
   border-radius: 12px;
   border: 1px solid var(--outline);
@@ -684,6 +968,33 @@ button {
   padding: 0.65rem 0.8rem;
   border-radius: 12px;
   border: 1px solid var(--outline);
+}
+
+.paid-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--ink-2);
+}
+
+.paid-toggle input {
+  accent-color: var(--accent);
+  width: 18px;
+  height: 18px;
+}
+
+.paid-amount {
+  max-width: 160px;
+}
+
+.paid-select {
+  min-width: 140px;
+  padding: 0.65rem 0.8rem;
+  border-radius: 12px;
+  border: 1px solid var(--outline);
+  background: #fdfcfb;
+  color: var(--ink-2);
 }
 
 .warning {
