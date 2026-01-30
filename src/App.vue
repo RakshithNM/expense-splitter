@@ -175,40 +175,48 @@ const unknownPayers = computed(() => {
   return Array.from(payers).filter((payer) => !peopleKeys.has(payer))
 })
 
-const shareableUrl = computed(() => {
-  const url = new URL(window.location.href)
-  const params = new URLSearchParams()
+function base64UrlEncode(input: string) {
+  const bytes = new TextEncoder().encode(input)
+  let binary = ''
+  for(const byte of bytes) {
+    binary += String.fromCharCode(byte)
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
+}
 
-  if(people.value.length > 0) {
-    const payload = people.value.map((person) => ({
+function base64UrlDecode(input: string) {
+  const base = input.replace(/-/g, '+').replace(/_/g, '/')
+  const pad = base.length % 4 ? '='.repeat(4 - (base.length % 4)) : ''
+  const binary = atob(base + pad)
+  const bytes = new Uint8Array(binary.length)
+  for(let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i)
+  }
+  return new TextDecoder().decode(bytes)
+}
+
+function buildSharePayload() {
+  return {
+    v: 1,
+    sid: shareId.value || undefined,
+    people: people.value.map((person) => ({
       name: person.name.trim(),
       paid: person.paid,
       paidAmount: person.paidAmount,
       paidTo: person.paidTo,
-    }))
-    params.set('people', JSON.stringify(payload))
+      auto: person.auto,
+    })),
+    expenses: normalizedExpenses.value,
+    payments: normalizedPayments.value,
   }
+}
 
-  const filteredExpenses = normalizedExpenses.value.filter(
-    (expense) => expense.payer.length > 0 && expense.amount > 0
-  )
-
-  if(filteredExpenses.length > 0) {
-    params.set('expenses', JSON.stringify(filteredExpenses))
+function generateShareId() {
+  if(typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
   }
-
-  const filteredPayments = normalizedPayments.value.filter(
-    (payment) => payment.from.length > 0 && payment.to.length > 0 && payment.amount > 0
-  )
-
-  if(filteredPayments.length > 0) {
-    params.set('payments', JSON.stringify(filteredPayments))
-  }
-
-  const query = params.toString()
-  url.search = query
-  return url.toString()
-})
+  return `sid-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`
+}
 
 const hasGroupData = computed(() =>
   people.value.some((person) => person.name.trim().length > 0) ||
@@ -216,11 +224,26 @@ const hasGroupData = computed(() =>
   payments.value.length > 0
 )
 
+const shareableUrl = computed(() => {
+  const url = new URL(window.location.href)
+  if(!hasGroupData.value) {
+    url.search = ''
+    url.hash = ''
+    return url.toString()
+  }
+  const payload = buildSharePayload()
+  const encoded = base64UrlEncode(JSON.stringify(payload))
+  url.search = ''
+  url.hash = encoded ? `d=${encoded}` : ''
+  return url.toString()
+})
+
 const canShare = ref(false)
 const canCopy = ref(false)
 const shareStatus = ref('')
 const shareInput = ref<HTMLInputElement | null>(null)
 const storageKey = 'expense-splitter-state-v1'
+const shareId = ref('')
 
 function addPerson() {
   const name = newPersonName.value.trim()
@@ -300,6 +323,7 @@ function resetGroup() {
   newExpenseAmount.value = null
   newExpenseNote.value = ''
   shareStatus.value = ''
+  shareId.value = ''
   if(typeof localStorage !== 'undefined') {
     localStorage.removeItem(storageKey)
   }
@@ -308,26 +332,19 @@ function resetGroup() {
 
 
 function loadFromUrl() {
-  const params = new URLSearchParams(window.location.search)
+  const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
   let hasUrlData = false
 
-  const peopleParam = params.get('people')
-  if(peopleParam) {
+  const dataParam = hashParams.get('d')
+  if(dataParam) {
     try {
-      const parsed = JSON.parse(peopleParam)
-      if(Array.isArray(parsed)) {
-        if(parsed.every((entry) => typeof entry === 'string')) {
-          people.value = parsed.map((name) => ({
-            name,
-            paid: false,
-            paidAmount: 0,
-            paidTo: '',
-            auto: false,
-          }))
-        } else {
-          people.value = parsed
-            .filter((entry) => typeof entry === 'object' && entry)
-            .map((entry) => ({
+      const decoded = base64UrlDecode(dataParam)
+      const parsed = JSON.parse(decoded)
+      if(parsed && typeof parsed === 'object') {
+        if(Array.isArray(parsed.people)) {
+          people.value = parsed.people
+            .filter((entry: unknown) => typeof entry === 'object' && entry)
+            .map((entry: any) => ({
               name: typeof entry.name === 'string' ? entry.name : '',
               paid: typeof entry.paid === 'boolean' ? entry.paid : false,
               paidAmount: typeof entry.paidAmount === 'number' ? entry.paidAmount : 0,
@@ -335,49 +352,32 @@ function loadFromUrl() {
               auto: typeof entry.auto === 'boolean' ? entry.auto : false,
             }))
         }
+        if(Array.isArray(parsed.expenses)) {
+          expenses.value = parsed.expenses
+            .filter((entry: unknown) => typeof entry === 'object' && entry)
+            .map((entry: any) => ({
+              payer: typeof entry.payer === 'string' ? entry.payer : '',
+              amount: typeof entry.amount === 'number' ? entry.amount : 0,
+              note: typeof entry.note === 'string' ? entry.note : '',
+            }))
+        }
+        if(Array.isArray(parsed.payments)) {
+          payments.value = parsed.payments
+            .filter((entry: unknown) => typeof entry === 'object' && entry)
+            .map((entry: any) => ({
+              from: typeof entry.from === 'string' ? entry.from : '',
+              to: typeof entry.to === 'string' ? entry.to : '',
+              amount: typeof entry.amount === 'number' ? entry.amount : 0,
+              note: typeof entry.note === 'string' ? entry.note : '',
+            }))
+        }
+        if(typeof parsed.sid === 'string') {
+          shareId.value = parsed.sid
+        }
         hasUrlData = true
       }
     } catch {
-      people.value = []
-    }
-  }
-
-  const expensesParam = params.get('expenses')
-  if(expensesParam) {
-    try {
-      const parsed = JSON.parse(expensesParam)
-      if(Array.isArray(parsed)) {
-        expenses.value = parsed
-          .filter((entry) => typeof entry === 'object' && entry)
-          .map((entry) => ({
-            payer: typeof entry.payer === 'string' ? entry.payer : '',
-            amount: typeof entry.amount === 'number' ? entry.amount : 0,
-            note: typeof entry.note === 'string' ? entry.note : '',
-          }))
-        hasUrlData = true
-      }
-    } catch {
-      expenses.value = []
-    }
-  }
-
-  const paymentsParam = params.get('payments')
-  if(paymentsParam) {
-    try {
-      const parsed = JSON.parse(paymentsParam)
-      if(Array.isArray(parsed)) {
-        payments.value = parsed
-          .filter((entry) => typeof entry === 'object' && entry)
-          .map((entry) => ({
-            from: typeof entry.from === 'string' ? entry.from : '',
-            to: typeof entry.to === 'string' ? entry.to : '',
-            amount: typeof entry.amount === 'number' ? entry.amount : 0,
-            note: typeof entry.note === 'string' ? entry.note : '',
-          }))
-        hasUrlData = true
-      }
-    } catch {
-      payments.value = []
+      // Ignore invalid hash data.
     }
   }
 
@@ -398,6 +398,9 @@ function loadFromStorage() {
 
   try {
     const parsed = JSON.parse(raw)
+    if(typeof parsed?.shareId === 'string') {
+      shareId.value = parsed.shareId
+    }
     if(Array.isArray(parsed?.people)) {
       if(parsed.people.every((entry: unknown) => typeof entry === 'string')) {
         people.value = parsed.people.map((name: string) => ({
@@ -451,6 +454,7 @@ function saveToStorage() {
   }
 
   const payload = {
+    shareId: shareId.value,
     people: people.value.map((person) => ({
       name: person.name.trim(),
       paid: person.paid,
@@ -597,35 +601,14 @@ function syncUrl() {
     return
   }
 
-  const params = new URLSearchParams()
-  if(people.value.length > 0) {
-    const payload = people.value.map((person) => ({
-      name: person.name.trim(),
-      paid: person.paid,
-      paidAmount: person.paidAmount,
-      paidTo: person.paidTo,
-    }))
-    params.set('people', JSON.stringify(payload))
+  if(!hasGroupData.value) {
+    window.history.replaceState({}, '', window.location.pathname)
+    return
   }
 
-  const filteredExpenses = normalizedExpenses.value.filter(
-    (expense) => expense.payer.length > 0 && expense.amount > 0
-  )
-
-  if(filteredExpenses.length > 0) {
-    params.set('expenses', JSON.stringify(filteredExpenses))
-  }
-
-  const filteredPayments = normalizedPayments.value.filter(
-    (payment) => payment.from.length > 0 && payment.to.length > 0 && payment.amount > 0
-  )
-
-  if(filteredPayments.length > 0) {
-    params.set('payments', JSON.stringify(filteredPayments))
-  }
-
-  const query = params.toString()
-  const nextUrl = query.length ? `?${query}` : window.location.pathname
+  const payload = buildSharePayload()
+  const encoded = base64UrlEncode(JSON.stringify(payload))
+  const nextUrl = encoded ? `${window.location.pathname}#d=${encoded}` : window.location.pathname
   window.history.replaceState({}, '', nextUrl)
 }
 
@@ -653,6 +636,9 @@ async function copyShareUrl() {
 }
 
 async function shareSplit() {
+  shareId.value = generateShareId()
+  syncUrl()
+  saveToStorage()
   try {
     if(canShare.value) {
       await navigator.share({
