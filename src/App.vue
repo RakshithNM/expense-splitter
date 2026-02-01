@@ -175,8 +175,7 @@ const unknownPayers = computed(() => {
   return Array.from(payers).filter((payer) => !peopleKeys.has(payer))
 })
 
-function base64UrlEncode(input: string) {
-  const bytes = new TextEncoder().encode(input)
+function base64UrlEncodeBytes(bytes: Uint8Array) {
   let binary = ''
   for(const byte of bytes) {
     binary += String.fromCharCode(byte)
@@ -184,7 +183,7 @@ function base64UrlEncode(input: string) {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
-function base64UrlDecode(input: string) {
+function base64UrlDecodeToBytes(input: string) {
   const base = input.replace(/-/g, '+').replace(/_/g, '/')
   const pad = base.length % 4 ? '='.repeat(4 - (base.length % 4)) : ''
   const binary = atob(base + pad)
@@ -192,7 +191,47 @@ function base64UrlDecode(input: string) {
   for(let i = 0; i < binary.length; i += 1) {
     bytes[i] = binary.charCodeAt(i)
   }
+  return bytes
+}
+
+function base64UrlEncodeString(input: string) {
+  const bytes = new TextEncoder().encode(input)
+  return base64UrlEncodeBytes(bytes)
+}
+
+function base64UrlDecodeString(input: string) {
+  const bytes = base64UrlDecodeToBytes(input)
   return new TextDecoder().decode(bytes)
+}
+
+async function compressString(input: string) {
+  if(typeof CompressionStream === 'undefined' || typeof DecompressionStream === 'undefined') {
+    return `u1.${base64UrlEncodeString(input)}`
+  }
+  try {
+    const bytes = new TextEncoder().encode(input)
+    const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream('gzip'))
+    const buffer = await new Response(stream).arrayBuffer()
+    return `c1.${base64UrlEncodeBytes(new Uint8Array(buffer))}`
+  } catch {
+    return `u1.${base64UrlEncodeString(input)}`
+  }
+}
+
+async function decompressString(input: string) {
+  if(input.startsWith('c1.')) {
+    if(typeof DecompressionStream === 'undefined') {
+      throw new Error('Compression not supported')
+    }
+    const bytes = base64UrlDecodeToBytes(input.slice(3))
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
+    const buffer = await new Response(stream).arrayBuffer()
+    return new TextDecoder().decode(new Uint8Array(buffer))
+  }
+  if(input.startsWith('u1.')) {
+    return base64UrlDecodeString(input.slice(3))
+  }
+  return base64UrlDecodeString(input)
 }
 
 function buildSharePayload() {
@@ -224,6 +263,8 @@ const hasGroupData = computed(() =>
   payments.value.length > 0
 )
 
+const encodedShare = ref('')
+
 const shareableUrl = computed(() => {
   const url = new URL(window.location.href)
   if(!hasGroupData.value) {
@@ -231,10 +272,8 @@ const shareableUrl = computed(() => {
     url.hash = ''
     return url.toString()
   }
-  const payload = buildSharePayload()
-  const encoded = base64UrlEncode(JSON.stringify(payload))
   url.search = ''
-  url.hash = encoded ? `d=${encoded}` : ''
+  url.hash = encodedShare.value ? `d=${encodedShare.value}` : ''
   return url.toString()
 })
 
@@ -331,14 +370,14 @@ function resetGroup() {
 }
 
 
-function loadFromUrl() {
+async function loadFromUrl() {
   const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ''))
   let hasUrlData = false
 
   const dataParam = hashParams.get('d')
   if(dataParam) {
     try {
-      const decoded = base64UrlDecode(dataParam)
+      const decoded = await decompressString(dataParam)
       const parsed = JSON.parse(decoded)
       if(parsed && typeof parsed === 'object') {
         if(Array.isArray(parsed.people)) {
@@ -596,18 +635,20 @@ function syncPeoplePaymentStatus() {
   }
 }
 
-function syncUrl() {
+async function syncUrl() {
   if(!isHydrated.value) {
     return
   }
 
   if(!hasGroupData.value) {
     window.history.replaceState({}, '', window.location.pathname)
+    encodedShare.value = ''
     return
   }
 
   const payload = buildSharePayload()
-  const encoded = base64UrlEncode(JSON.stringify(payload))
+  const encoded = await compressString(JSON.stringify(payload))
+  encodedShare.value = encoded
   const nextUrl = encoded ? `${window.location.pathname}#d=${encoded}` : window.location.pathname
   window.history.replaceState({}, '', nextUrl)
 }
@@ -637,7 +678,7 @@ async function copyShareUrl() {
 
 async function shareSplit() {
   shareId.value = generateShareId()
-  syncUrl()
+  await syncUrl()
   saveToStorage()
   try {
     if(canShare.value) {
@@ -658,8 +699,8 @@ async function shareSplit() {
   }
 }
 
-onMounted(() => {
-  loadFromUrl()
+onMounted(async () => {
+  await loadFromUrl()
   syncPeopleFromExpenses()
   syncPeoplePaymentStatus()
   isHydrated.value = true
@@ -669,6 +710,7 @@ onMounted(() => {
     (typeof navigator.clipboard?.writeText === 'function' ||
       (typeof document !== 'undefined' && typeof document.execCommand === 'function'))
   saveToStorage()
+  syncUrl()
 })
 
 watch(allSettled, (settled, prevSettled) => {
